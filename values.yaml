@@ -204,6 +204,56 @@ Servers:
       ## Has higher precedence over `controller.pdb.minAvailable`
       maxUnavailable: ""
 
+    # Event-driven autoscaling with KEDA (https://keda.sh/docs/latest/scalers/).
+    # Requires the KEDA operator and CRDs on the cluster. KEDA creates and owns the HPA, so keep
+    # hpa.enabled false for this server (rendering fails otherwise); the Deployment then leaves
+    # out spec.replicas.
+    keda:
+      enabled: false
+      # minReplicaCount defaults to 1. Set 0 only with a trigger that can scale from zero
+      # (cpu/memory cannot).
+      minReplicaCount: 1
+      # Required when enabled.
+      maxReplicaCount: 5
+      pollingInterval: 30
+      # Only applies when scaling to/from zero.
+      cooldownPeriod: 300
+      # idleReplicaCount: 0
+      # Replicas to hold when a scaler keeps failing (Optional).
+      fallback: {}
+        # failureThreshold: 3
+        # replicas: 2
+      # Passed through as ScaledObject spec.advanced, e.g. HPA behavior (Optional).
+      advanced: {}
+        # horizontalPodAutoscalerConfig:
+        #   behavior:
+        #     scaleDown:
+        #       stabilizationWindowSeconds: 300
+      # Annotations for the ScaledObject (Optional), e.g. adopt an existing HPA:
+      #   scaledobject.keda.sh/transfer-hpa-ownership: "true"
+      #   (also set advanced.horizontalPodAutoscalerConfig.name to that HPA's name)
+      annotations: {}
+      # KEDA triggers, rendered as written.
+      triggers: []
+        # - type: redis-streams
+        #   metadata:
+        #     address: my-redis-master.my-namespace.svc.cluster.local:6379
+        #     stream: my-stream
+        #     consumerGroup: my-group
+        #     pendingEntriesCount: "5"
+        # - type: cpu
+        #   metricType: Utilization
+        #   metadata:
+        #     value: "80"
+      # Optional TriggerAuthentication built from existing Secrets. Every trigger that is not
+      # cpu/memory and has no authenticationRef of its own gets this one.
+      triggerAuthentication:
+        enabled: false
+        secretTargetRef: []
+          # - parameter: password
+          #   name: my-existing-secret
+          #   key: REDIS_PASSWORD
+
     # Configuration for HorizontalPodAutoscaler
     ## Ref: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/
     hpa:

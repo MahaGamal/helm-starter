@@ -27,7 +27,10 @@ metadata:
     {{- toYaml $.Values.extraLabels | nindent 4 }}
     {{- end }}
 spec:
+  {{- /* KEDA owns replicas through its HPA; a fixed value here would fight it. */}}
+  {{- if not (and $values.keda $values.keda.enabled) }}
   replicas: {{ $values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "<CHARTNAME>.name" $ }}
