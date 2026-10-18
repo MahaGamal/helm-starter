@@ -1,0 +1,95 @@
+{{- /*
+KEDA ScaledObject (and optional TriggerAuthentication) per server. Off unless
+Servers.<name>.keda.enabled is true. KEDA creates and owns the HPA for the server, so
+Servers.<name>.hpa.enabled must be false for the same server, and the Deployment leaves out
+spec.replicas. When triggerAuthentication is enabled, every trigger except cpu/memory that has
+no authenticationRef of its own gets the generated one. Requires the KEDA operator and its CRDs (keda.sh/v1alpha1) on the cluster.
+*/ -}}
+{{- range $name, $values := .Values.Servers }}
+{{- $keda := $values.keda | default dict }}
+{{- if $keda.enabled }}
+{{- $fullName := include "<CHARTNAME>.fullname" $ }}
+{{- if and $values.hpa $values.hpa.enabled }}
+{{- fail (printf "Servers.%s: keda.enabled and hpa.enabled cannot both be true; KEDA creates its own HPA" $name) }}
+{{- end }}
+{{- if not $keda.triggers }}
+{{- fail (printf "Servers.%s.keda.triggers needs at least one KEDA trigger" $name) }}
+{{- end }}
+{{- $min := 1 }}
+{{- if hasKey $keda "minReplicaCount" }}
+{{- $min = int $keda.minReplicaCount }}
+{{- end }}
+{{- $max := required (printf "Servers.%s.keda.maxReplicaCount is required" $name) $keda.maxReplicaCount | int }}
+{{- if gt $min $max }}
+{{- fail (printf "Servers.%s.keda: minReplicaCount (%d) must be <= maxReplicaCount (%d)" $name $min $max) }}
+{{- end }}
+{{- $auth := $keda.triggerAuthentication | default dict }}
+{{- $authName := printf "%s-%s-keda" $fullName $name }}
+{{- if $auth.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $authName }}
+  labels:
+    app.kubernetes.io/name: {{ include "<CHARTNAME>.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/component: {{ $name }}
+    helm.sh/chart: {{ include "<CHARTNAME>.chart" $ }}
+spec:
+  # Reference existing Secrets only; never put credentials in values.
+  secretTargetRef:
+    {{- required (printf "Servers.%s.keda.triggerAuthentication.secretTargetRef is required when triggerAuthentication.enabled" $name) $auth.secretTargetRef | toYaml | nindent 4 }}
+{{- end }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullName }}-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "<CHARTNAME>.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/component: {{ $name }}
+    helm.sh/chart: {{ include "<CHARTNAME>.chart" $ }}
+    {{- if $.Values.extraLabels }}
+    {{- toYaml $.Values.extraLabels | nindent 4 }}
+    {{- end }}
+  {{- with $keda.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullName }}-{{ $name }}
+  pollingInterval: {{ $keda.pollingInterval | default 30 }}
+  cooldownPeriod: {{ $keda.cooldownPeriod | default 300 }}
+  minReplicaCount: {{ $min }}
+  maxReplicaCount: {{ $max }}
+  {{- if hasKey $keda "idleReplicaCount" }}
+  idleReplicaCount: {{ $keda.idleReplicaCount }}
+  {{- end }}
+  {{- with $keda.fallback }}
+  fallback:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $keda.advanced }}
+  advanced:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  triggers:
+    {{- range $trigger := $keda.triggers }}
+    - {{ toYaml (omit $trigger "authenticationRef") | indent 6 | trim }}
+      {{- if $trigger.authenticationRef }}
+      authenticationRef:
+        {{- toYaml $trigger.authenticationRef | nindent 8 }}
+      {{- else if and $auth.enabled (not (has $trigger.type (list "cpu" "memory"))) }}
+      authenticationRef:
+        name: {{ $authName }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}
